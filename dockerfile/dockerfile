@@ -1,0 +1,6 @@
+#Start from Scratch
+FROM scratch
+#Copy binary
+COPY klippy klippy
+#Run binary
+CMD ["./klippy"]
