@@ -1,7 +1,9 @@
 package registry
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"net/url"
@@ -10,10 +12,15 @@ import (
 	log "github.com/Sirupsen/logrus"
 )
 
-func httpGet(url string) (*http.Response, error) {
+func httpGet(url, authToken string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
+	}
+
+	// If a token has been added
+	if len(authToken) != 0 {
+		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", authToken))
 	}
 
 	req.Header.Add("Content-Type", "application/json")
@@ -24,7 +31,6 @@ func httpGet(url string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	return resp, nil
 }
@@ -40,11 +46,15 @@ func ImageExists(imageName string) (bool, error) {
 		return false, err
 	}
 
-	_, err = checkRegistryForHeader(registry, image)
+	token, err := identifyRegistryAuthBearer(registry, image)
 	if err != nil {
 		return false, err
 	}
 
+	err = retrieveImageManifest(registry, image, token)
+	if err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -103,12 +113,12 @@ func identifyRegistryImageTag(imageurl string) (registry, image, tag string, err
 	return registry, image[1:], tag, nil
 }
 
-// checkRegistryForHeader - hits the v2 url and find the bearer server, uses that for a header
-func checkRegistryForHeader(registry, image string) (string, error) {
+// identifyRegistryAuthBearer - hits the v2 url and find the bearer server, and returns a token
+func identifyRegistryAuthBearer(registry, image string) (string, error) {
 
 	//Registry /v2 endpoint
 	v2Endpoint := registry + "/v2/"
-	response, err := httpGet(v2Endpoint)
+	response, err := httpGet(v2Endpoint, "")
 	if err != nil {
 		return "", err
 	}
@@ -131,9 +141,41 @@ func checkRegistryForHeader(registry, image string) (string, error) {
 	if bearerService == "" {
 		return "", fmt.Errorf("No Registry bearer service could be identified for registry [%s]", registry)
 	}
-	headerQueryURL := fmt.Sprintf("%s?service=%s&scope=repository:%s:pull", bearerURL, bearerService, image)
-	log.Infof("%s", headerQueryURL)
-	return "", nil
+	authURL := fmt.Sprintf("%s?service=%s&scope=repository:%s:pull", bearerURL, bearerService, image)
+	log.Debugf("Built URL [%s]", authURL)
+
+	// Close the previous ioreader
+	response.Body.Close()
+
+	// Perform the HTTP Get against the authorisation server
+	response, err = httpGet(authURL, "")
+	if err != nil {
+		return "", err
+	}
+	// Close this response at the end of the function
+	defer response.Body.Close()
+
+	// Read the contents of the response into a []byte
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return "", err
+	}
+	// Struct for the auth server response
+	var authResponse struct {
+		Token string `json:"token"`
+		// TODO - other json objects are returned
+	}
+
+	// Parse contents into a struct
+	err = json.Unmarshal(body, &authResponse)
+	if err != nil {
+		return "", err
+	}
+	if authResponse.Token == "" {
+		return "", fmt.Errorf("No Token could be identified in the response from the authorisation server")
+	}
+	log.Infof("Token of [%d] bytes found", len(authResponse.Token))
+	return authResponse.Token, nil
 }
 
 // This will parse the header and find the v2 registry details needed
@@ -159,4 +201,28 @@ func getBearerSettings(headerString string) (registryRealm, registryService stri
 	}
 	// Returns "" if no realm is found
 	return registryRealm, registryService
+}
+
+func retrieveImageManifest(registry, image, token string) error {
+	//Build the Registry v2 URL
+	v2RegistryURL := fmt.Sprintf("%s/v2/%s/tags/list", registry, image)
+	log.Debugf("Built v2 Registry URL [%s]", v2RegistryURL)
+	response, err := httpGet(v2RegistryURL, token)
+	if err != nil {
+		return err
+	}
+	if response.StatusCode != 200 {
+		return fmt.Errorf("Unable to retrieve Image tags")
+	}
+	// Close this response at the end of the function
+	defer response.Body.Close()
+
+	// Read the contents of the response into a []byte
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return err
+	}
+	//TODO - pase the raw []byte into a JSON struct
+	log.Infof("%s", body)
+	return nil
 }
