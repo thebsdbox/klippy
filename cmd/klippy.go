@@ -27,8 +27,10 @@ var klippyCmd = &cobra.Command{
 func init() {
 	// Global flag across all subcommands
 	klippyCmd.PersistentFlags().IntVar(&loglevel, "logLevel", 4, "Set the logging level [0=panic, 3=warning, 5=debug]")
-	imageLookup.Flags().StringVar(&imageName, "name", "", "")
+	imageLookup.PersistentFlags().StringVar(&imageName, "name", "", "")
+	imageLookup.AddCommand(tagLookup)
 	klippyCmd.AddCommand(imageLookup)
+
 	// log.Info("Starting environment initialisation and inspection")
 	// log.Info("Looking for Docker endpoint")
 	// var err error
@@ -59,9 +61,29 @@ var imageLookup = &cobra.Command{
 	Short: "Lookup information about an image",
 	Run: func(cmd *cobra.Command, args []string) {
 		log.SetLevel(log.Level(loglevel))
-		_, err := registry.ImageExists(imageName)
+		if imageName == "" {
+			cmd.Help()
+			log.Fatalf("No image specified")
+		}
+	},
+}
+
+var tagLookup = &cobra.Command{
+	Use:   "tag",
+	Short: "List all tags of a specific image",
+	Run: func(cmd *cobra.Command, args []string) {
+		log.SetLevel(log.Level(loglevel))
+		if imageName == "" {
+			cmd.Help()
+			log.Fatalf("No image specified")
+		}
+		tags, err := registry.RetrieveTags(imageName)
 		if err != nil {
-			log.Warnf("%s", err.Error())
+			log.Fatalf("%s", err.Error())
+		}
+
+		for i := range tags {
+			fmt.Printf("\t%s\n", tags[i])
 		}
 	},
 }
