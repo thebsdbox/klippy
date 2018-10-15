@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	log "github.com/Sirupsen/logrus"
 )
@@ -20,6 +21,44 @@ import (
 type tagsStruct struct {
 	Name string   `json:"name"`
 	Tags []string `json:"tags"`
+}
+
+//v2Manifest contains the manifest that defines a container image
+type v2Manifest struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	Name          string `json:"name"`
+	Tag           string `json:"tag"`
+	Architecture  string `json:"architecture"`
+	FsLayers      []struct {
+		BlobSum string `json:"blobSum"`
+	} `json:"fsLayers"`
+	History []struct {
+		V1Compatibility string `json:"v1Compatibility"`
+	} `json:"history"`
+	Signatures []struct {
+		Header struct {
+			Jwk struct {
+				Crv string `json:"crv"`
+				Kid string `json:"kid"`
+				Kty string `json:"kty"`
+				X   string `json:"x"`
+				Y   string `json:"y"`
+			} `json:"jwk"`
+			Alg string `json:"alg"`
+		} `json:"header"`
+		Signature string `json:"signature"`
+		Protected string `json:"protected"`
+	} `json:"signatures"`
+}
+
+type v1ContainerLayer struct {
+	ID              string    `json:"id"`
+	Parent          string    `json:"parent"`
+	Created         time.Time `json:"created"`
+	ContainerConfig struct {
+		Cmd []string `json:"Cmd"`
+	} `json:"container_config"`
+	Throwaway bool `json:"throwaway"`
 }
 
 func httpGet(url, authToken string) (*http.Response, error) {
@@ -60,6 +99,23 @@ func RetrieveTags(imageName string) ([]string, error) {
 	}
 
 	return retrieveImageTags(registry, image, token)
+}
+
+// RetrieveCommands - This will find an image on a registry and return all of it's commands
+func RetrieveCommands(imageName string) ([]string, error) {
+	// Split Image Name and locate if a registry is part of it exists
+	registry, image, tag, err := identifyRegistryImageTag(imageName)
+	log.Debugf("Registry [%s], Image[%s], Tag [%s]", registry, image, tag)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := identifyRegistryAuthBearer(registry, image)
+	if err != nil {
+		return nil, err
+	}
+
+	return retrieveImageCommands(registry, image, tag, token)
 }
 
 // ImageExists is used to determine if a docker image actually exists
@@ -251,4 +307,63 @@ func retrieveImageTags(registry, image, token string) ([]string, error) {
 	err = json.Unmarshal(body, &tagList)
 
 	return tagList.Tags, nil
+}
+
+func retrieveImageCommands(registry, image, tag, token string) ([]string, error) {
+	//Build the Registry v2 URL
+	v2RegistryURL := fmt.Sprintf("%s/v2/%s/manifests/%s", registry, image, tag)
+	log.Debugf("Built v2 Registry URL [%s]", v2RegistryURL)
+	response, err := httpGet(v2RegistryURL, token)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode != 200 {
+		log.Debugf("HTTP Error [%s]", response.Status)
+		return nil, fmt.Errorf("Unable to retrieve tags for image [%s]", image)
+	}
+	// Close this response at the end of the function
+	defer response.Body.Close()
+
+	// Read the contents of the response into a []byte
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return nil, err
+	}
+	//fmt.Printf("%s", body)
+
+	// Unmarshall the Manifest json
+	var manifest v2Manifest
+	err = json.Unmarshal(body, &manifest)
+	if err != nil {
+		return nil, err
+	}
+
+	// Iterate over the v1 Layers
+	var commands []string
+	for i := range manifest.History {
+		var layer v1ContainerLayer
+
+		err = json.Unmarshal([]byte(manifest.History[i].V1Compatibility), &layer)
+		if err != nil {
+			return nil, err
+		}
+		// Combine the string, from the string array
+		var buildString string
+		buildString = "\033[32m"
+		for x := range layer.ContainerConfig.Cmd {
+			buildString = fmt.Sprintf(("%s%s"), buildString, layer.ContainerConfig.Cmd[x])
+		}
+
+		// Find if a NOP (No Operation scenario exists)
+		nop := strings.Split(buildString, "#(nop) ")
+		if len(nop) > 1 {
+			buildString = fmt.Sprintf("\033[31m%s\033[0m", strings.TrimSpace(nop[len(nop)-1]))
+		}
+		// Sanitise from the usually bonkers amounts of tabs
+		tabSanitise := strings.Replace(buildString, "\t", "", -1)
+		// Tidy the newlines
+		ampersandSanitsie := strings.Replace(tabSanitise, "&&", "\\\n       \033[37m&&\033[32m", -1)
+		commands = append(commands, ampersandSanitsie)
+	}
+	return commands, nil
 }
