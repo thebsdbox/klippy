@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"text/tabwriter"
 
 	log "github.com/Sirupsen/logrus"
 
@@ -29,6 +30,8 @@ func init() {
 	klippyCmd.PersistentFlags().IntVar(&loglevel, "logLevel", 4, "Set the logging level [0=panic, 3=warning, 5=debug]")
 	imageLookup.PersistentFlags().StringVar(&imageName, "name", "", "")
 	imageLookup.AddCommand(tagLookup)
+	imageLookup.AddCommand(cmdLookup)
+
 	klippyCmd.AddCommand(imageLookup)
 
 	// log.Info("Starting environment initialisation and inspection")
@@ -61,15 +64,12 @@ var imageLookup = &cobra.Command{
 	Short: "Lookup information about an image",
 	Run: func(cmd *cobra.Command, args []string) {
 		log.SetLevel(log.Level(loglevel))
-		if imageName == "" {
-			cmd.Help()
-			log.Fatalf("No image specified")
-		}
+		cmd.Help()
 	},
 }
 
 var tagLookup = &cobra.Command{
-	Use:   "tag",
+	Use:   "tags",
 	Short: "List all tags of a specific image",
 	Run: func(cmd *cobra.Command, args []string) {
 		log.SetLevel(log.Level(loglevel))
@@ -85,5 +85,29 @@ var tagLookup = &cobra.Command{
 		for i := range tags {
 			fmt.Printf("\t%s\n", tags[i])
 		}
+	},
+}
+
+var cmdLookup = &cobra.Command{
+	Use:   "commands",
+	Short: "List all commands used to build a specific image",
+	Run: func(cmd *cobra.Command, args []string) {
+		log.SetLevel(log.Level(loglevel))
+		if imageName == "" {
+			cmd.Help()
+			log.Fatalf("No image specified")
+		}
+		cmds, err := registry.RetrieveCommands(imageName)
+		if err != nil {
+			log.Fatalf("%s", err.Error())
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+
+		fmt.Fprintln(w, "Layer\tCommand")
+
+		for i := range cmds {
+			fmt.Fprintf(w, "\033[37m%d\t%s\n", i, cmds[i])
+		}
+		w.Flush()
 	},
 }
