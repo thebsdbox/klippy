@@ -1,7 +1,7 @@
 package registry
 
 // This is a bit of a learning exercise, useful URLs below
-// : https://docs.docker.com/registry/spec/api/#errors-2
+// : https://docs.docker.com/registry/spec/api/#detail
 // : https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
 //
 
@@ -165,14 +165,22 @@ func identifyRegistryImageTag(imageurl string) (registry, image, tag string, err
 	}
 
 	registry = strings.TrimSuffix(u.String(), u.Path)
+
+	// Split the NameSpace@sha:tag by the @ delimiter
+	parts := strings.Split(u.Path, "@")
+	// Parse the output from splitting the url path
+	if len(parts) == 2 {
+		// Expected output
+		return registry, parts[0][1:], parts[1], nil
+	}
+
 	// Split the NameSpace:tag by the colon delimiter
-	parts := strings.Split(u.Path, ":")
+	parts = strings.Split(u.Path, ":")
 
 	// Parse the output from splitting the url path
-	if len(parts) > 1 {
+	if len(parts) == 2 {
 		// Expected output
-		image = parts[0]
-		tag = parts[1]
+		return registry, parts[0][1:], parts[1], nil
 	}
 	// If only a namespace/image is specified drop to the latest tag (docker behaviour)
 	if len(parts) == 1 {
@@ -182,6 +190,7 @@ func identifyRegistryImageTag(imageurl string) (registry, image, tag string, err
 	if len(parts) > 2 {
 		log.Warnf("Expecting only 2 parts to Namespace/project : tag")
 	}
+
 	if len(parts) == 0 {
 		return "", "", "", fmt.Errorf("Unable to parse namespace/image:tag")
 	}
