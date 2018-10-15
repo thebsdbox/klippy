@@ -33,7 +33,7 @@ The command `klippy image commands --name <image>` will again query a registry a
 **Example:**
 
 ```
-image commands --name library/golang
+klippy image commands --name library/golang
 Layer    Command
 0   WORKDIR /go
 1   /bin/sh -c mkdir -p "$GOPATH/src" "$GOPATH/bin" \
