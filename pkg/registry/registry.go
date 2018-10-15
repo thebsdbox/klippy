@@ -1,5 +1,10 @@
 package registry
 
+// This is a bit of a learning exercise, useful URLs below
+// : https://docs.docker.com/registry/spec/api/#errors-2
+// : https://github.com/moby/moby/blob/master/contrib/download-frozen-image-v2.sh
+//
+
 import (
 	"encoding/json"
 	"fmt"
@@ -11,6 +16,11 @@ import (
 
 	log "github.com/Sirupsen/logrus"
 )
+
+type tagsStruct struct {
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
+}
 
 func httpGet(url, authToken string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -35,6 +45,23 @@ func httpGet(url, authToken string) (*http.Response, error) {
 	return resp, nil
 }
 
+// RetrieveTags - This will find an image on a registry and return all its tags
+func RetrieveTags(imageName string) ([]string, error) {
+	// Split Image Name and locate if a registry is part of it exists
+	registry, image, tag, err := identifyRegistryImageTag(imageName)
+	log.Debugf("Registry [%s], Image[%s], Tag [%s]", registry, image, tag)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := identifyRegistryAuthBearer(registry, image)
+	if err != nil {
+		return nil, err
+	}
+
+	return retrieveImageTags(registry, image, token)
+}
+
 // ImageExists is used to determine if a docker image actually exists
 func ImageExists(imageName string) (bool, error) {
 	log.Infof("Beginning lookup of image [%s]", imageName)
@@ -46,15 +73,11 @@ func ImageExists(imageName string) (bool, error) {
 		return false, err
 	}
 
-	token, err := identifyRegistryAuthBearer(registry, image)
+	_, err = identifyRegistryAuthBearer(registry, image)
 	if err != nil {
 		return false, err
 	}
 
-	err = retrieveImageManifest(registry, image, token)
-	if err != nil {
-		return false, err
-	}
 	return true, nil
 }
 
@@ -77,7 +100,7 @@ func identifyRegistryImageTag(imageurl string) (registry, image, tag string, err
 
 	_, err = net.LookupHost(u.Hostname())
 	if err != nil {
-		log.Infof("Unable to resolve [%s] dropping bach to docker hub", u.Hostname())
+		log.Debugf("Unable to resolve [%s] dropping back to docker hub", u.Hostname())
 		u, err = url.Parse("https://registry-1.docker.io/" + imageurl)
 		if err != nil {
 			return "", "", "", err
@@ -95,8 +118,9 @@ func identifyRegistryImageTag(imageurl string) (registry, image, tag string, err
 		image = parts[0]
 		tag = parts[1]
 	}
+	// If only a namespace/image is specified drop to the latest tag (docker behaviour)
 	if len(parts) == 1 {
-		log.Debugf("Setting tag to :latest")
+		log.Debugf("Setting tag to \"latest\"")
 		tag = "latest"
 	}
 	if len(parts) > 2 {
@@ -107,7 +131,7 @@ func identifyRegistryImageTag(imageurl string) (registry, image, tag string, err
 	}
 	image = parts[0]
 
-	log.Infof("Identified registry [%s]", registry)
+	log.Debugf("Identified registry [%s]", registry)
 
 	// Remove the first character from the image as it will be a slash [1:]
 	return registry, image[1:], tag, nil
@@ -174,7 +198,7 @@ func identifyRegistryAuthBearer(registry, image string) (string, error) {
 	if authResponse.Token == "" {
 		return "", fmt.Errorf("No Token could be identified in the response from the authorisation server")
 	}
-	log.Infof("Token of [%d] bytes found", len(authResponse.Token))
+	log.Debugf("Token of [%d] bytes found", len(authResponse.Token))
 	return authResponse.Token, nil
 }
 
@@ -203,16 +227,17 @@ func getBearerSettings(headerString string) (registryRealm, registryService stri
 	return registryRealm, registryService
 }
 
-func retrieveImageManifest(registry, image, token string) error {
+func retrieveImageTags(registry, image, token string) ([]string, error) {
 	//Build the Registry v2 URL
 	v2RegistryURL := fmt.Sprintf("%s/v2/%s/tags/list", registry, image)
 	log.Debugf("Built v2 Registry URL [%s]", v2RegistryURL)
 	response, err := httpGet(v2RegistryURL, token)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if response.StatusCode != 200 {
-		return fmt.Errorf("Unable to retrieve Image tags")
+		log.Debugf("HTTP Error [%s]", response.Status)
+		return nil, fmt.Errorf("Unable to retrieve tags for image [%s]", image)
 	}
 	// Close this response at the end of the function
 	defer response.Body.Close()
@@ -220,9 +245,10 @@ func retrieveImageManifest(registry, image, token string) error {
 	// Read the contents of the response into a []byte
 	body, err := ioutil.ReadAll(response.Body)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	//TODO - pase the raw []byte into a JSON struct
-	log.Infof("%s", body)
-	return nil
+	var tagList tagsStruct
+	err = json.Unmarshal(body, &tagList)
+
+	return tagList.Tags, nil
 }
