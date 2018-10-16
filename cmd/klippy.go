@@ -31,6 +31,7 @@ func init() {
 	imageLookup.PersistentFlags().StringVar(&imageName, "name", "", "")
 	imageLookup.AddCommand(tagLookup)
 	imageLookup.AddCommand(cmdLookup)
+	imageLookup.AddCommand(overviewLookup)
 
 	klippyCmd.AddCommand(imageLookup)
 
@@ -109,5 +110,37 @@ var cmdLookup = &cobra.Command{
 			fmt.Fprintf(w, "\033[37m%d\t%s\n", i, cmds[i])
 		}
 		w.Flush()
+	},
+}
+
+var overviewLookup = &cobra.Command{
+	Use:   "overview",
+	Short: "Print an overview of the details of a specific image",
+	Run: func(cmd *cobra.Command, args []string) {
+		log.SetLevel(log.Level(loglevel))
+		if imageName == "" {
+			cmd.Help()
+			log.Fatalf("No image specified")
+		}
+		manifest, err := registry.RetrieveOverview(imageName)
+		if err != nil {
+			log.Fatalf("%s", err.Error())
+		}
+		fmt.Printf("Name:\t%s\n", manifest.Name)
+		fmt.Printf("Arch:\t%s\n", manifest.Architecture)
+		fmt.Printf("Tag:\t%s\n", manifest.Tag)
+		fmt.Println("Layers:")
+		for i := range manifest.FsLayers {
+			fmt.Printf("\tLayer [%d]:\t%s\n", i, manifest.FsLayers[i].BlobSum)
+		}
+		// fmt.Println("Layer Build")
+		// for i := range manifest.History {
+		// 	var v1Layer registry.V1ContainerLayer
+		// 	err = json.Unmarshal([]byte(manifest.History[i].V1Compatibility), &v1Layer)
+		// 	if err != nil {
+		// 		log.Fatalf("%s", err.Error())
+		// 	}
+		// 	fmt.Printf("\tLayer Architecture:\t%s\n", v1Layer.DockerVersion)
+		// }
 	},
 }
